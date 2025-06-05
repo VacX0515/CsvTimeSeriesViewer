@@ -11,16 +11,6 @@ using ScottPlot.Plottable;
 
 namespace CsvTimeSeriesViewer
 {
-    // 선택된 데이터 포인트를 위한 클래스
-    public class SelectedPointData
-    {
-        public double X { get; set; }
-        public double Y { get; set; }
-        public string Label { get; set; }
-        public string File { get; set; }
-        public string Column { get; set; }
-    }
-
     public partial class MainForm : Form
     {
         private Dictionary<string, CsvFileInfo> csvFiles;
@@ -30,7 +20,7 @@ namespace CsvTimeSeriesViewer
         private Crosshair crossHair;
         private MarkerPlot highlightMarker;
         private Text highlightText;
-        private List<ScatterPlot> allPlots = new List<ScatterPlot>();
+        private List<SignalPlotXY> allPlots = new List<SignalPlotXY>();
 
         // 드래그 선택 관련
         private bool isDragging = false;
@@ -47,25 +37,30 @@ namespace CsvTimeSeriesViewer
         private bool isLogScale = false;
         private bool isLegendVisible = true;
 
-        private class SelectedPointData
-        {
-            public double X { get; set; }
-            public double Y { get; set; }
-            public string Label { get; set; }
-            public string File { get; set; }
-            public string Column { get; set; }
-        }
+        // 오른쪽 정보 패널
+        private Panel pnlRightInfo;
+        private RichTextBox rtbDataInfo;
+        private DataGridView dgvCurrentValues;
+        private Label lblInfoTitle;
 
+        // 데이터 타입 감지
+        private Dictionary<string, bool> columnIsNumeric;
+
+        // 줌/팬 상태 추적
+        private bool isUserZooming = false;
+        private AxisLimits lastAxisLimits;
 
         public MainForm()
         {
             try
             {
                 InitializeComponent();
+                InitializeRightPanel();
                 csvFiles = new Dictionary<string, CsvFileInfo>();
-                selectedPoints = new List<SelectedPointData>();  // 수정됨
+                selectedPoints = new List<SelectedPointData>();
                 columnToYAxisIndex = new Dictionary<string, int>();
                 yAxisColors = new List<Color> { Color.Black, Color.Blue, Color.Red, Color.Green, Color.Purple };
+                columnIsNumeric = new Dictionary<string, bool>();
                 SetupSplitContainers();
             }
             catch (Exception ex)
@@ -76,8 +71,94 @@ namespace CsvTimeSeriesViewer
             }
         }
 
+        private void InitializeRightPanel()
+        {
+            // 오른쪽 정보 패널 생성
+            pnlRightInfo = new Panel
+            {
+                Dock = DockStyle.Right,
+                Width = 400,
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = SystemColors.Control
+            };
+
+            // 제목 라벨
+            lblInfoTitle = new Label
+            {
+                Text = "실시간 데이터 정보",
+                Dock = DockStyle.Top,
+                Height = 40,
+                Font = new Font("맑은 고딕", 12F, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+                BackColor = Color.FromArgb(64, 64, 64),
+                ForeColor = Color.White
+            };
+
+            // 현재 값 표시 DataGridView
+            dgvCurrentValues = new DataGridView
+            {
+                Dock = DockStyle.Top,
+                Height = 300,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                ReadOnly = true,
+                RowHeadersVisible = false,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                BackgroundColor = Color.White,
+                BorderStyle = BorderStyle.None
+            };
+
+            // 컬럼 설정
+            dgvCurrentValues.Columns.Add("File", "파일");
+            dgvCurrentValues.Columns.Add("Column", "컬럼");
+            dgvCurrentValues.Columns.Add("Value", "현재값");
+            dgvCurrentValues.Columns.Add("Unit", "단위");
+            dgvCurrentValues.Columns.Add("Status", "상태");
+
+            dgvCurrentValues.Columns["File"].Width = 100;
+            dgvCurrentValues.Columns["Column"].Width = 100;
+            dgvCurrentValues.Columns["Value"].Width = 80;
+            dgvCurrentValues.Columns["Unit"].Width = 60;
+            dgvCurrentValues.Columns["Status"].Width = 60;
+
+            // 데이터 정보 텍스트박스
+            rtbDataInfo = new RichTextBox
+            {
+                Dock = DockStyle.Fill,
+                ReadOnly = true,
+                Font = new Font("Consolas", 10),
+                BackColor = Color.FromArgb(250, 250, 250),
+                BorderStyle = BorderStyle.None
+            };
+
+            // 스플리터
+            var splitter = new Splitter
+            {
+                Dock = DockStyle.Top,
+                Height = 3,
+                BackColor = SystemColors.ControlDark
+            };
+
+            // 패널에 컨트롤 추가
+            pnlRightInfo.Controls.Add(rtbDataInfo);
+            pnlRightInfo.Controls.Add(splitter);
+            pnlRightInfo.Controls.Add(dgvCurrentValues);
+            pnlRightInfo.Controls.Add(lblInfoTitle);
+
+            // 메인 폼에 추가
+            this.Controls.Add(pnlRightInfo);
+            pnlRightInfo.BringToFront();
+        }
+
         private void SetupSplitContainers()
         {
+            // splitMain의 너비를 조정하여 오른쪽 패널 공간 확보
+            if (splitMain != null && pnlRightInfo != null)
+            {
+                splitMain.Width = this.ClientSize.Width - pnlRightInfo.Width;
+            }
+
             splitMain.SplitterMoved += (s, e) =>
             {
                 if (splitMain.SplitterDistance < 50)
@@ -90,8 +171,8 @@ namespace CsvTimeSeriesViewer
                     splitLeft.SplitterDistance = 0;
             };
 
-            splitMain.SplitterDistance = 600;
-            splitLeft.SplitterDistance = 295;
+            splitMain.SplitterDistance = 500;
+            splitLeft.SplitterDistance = 250;
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -140,7 +221,7 @@ namespace CsvTimeSeriesViewer
 
         private void InitializePlot()
         {
-            formsPlot.Plot.Title("다중 CSV 시계열 데이터");
+            formsPlot.Plot.Title("압력 데이터 실시간 모니터링");
             formsPlot.Plot.XLabel("시간");
             formsPlot.Plot.YLabel("값");
             formsPlot.Plot.Style(Style.Seaborn);
@@ -165,6 +246,7 @@ namespace CsvTimeSeriesViewer
             formsPlot.MouseDown += FormsPlot_MouseDown;
             formsPlot.MouseUp += FormsPlot_MouseUp;
             formsPlot.MouseDoubleClick += FormsPlot_MouseDoubleClick;
+            formsPlot.AxesChanged += FormsPlot_AxesChanged;
             this.KeyPreview = true;
             this.KeyDown += MainForm_KeyDown;
 
@@ -191,20 +273,60 @@ namespace CsvTimeSeriesViewer
             formsPlot.Refresh();
         }
 
-        private void FormsPlot_MouseDown(object sender, MouseEventArgs e)
+        private void FormsPlot_AxesChanged(object sender, EventArgs e)
         {
-            if (e.Button == MouseButtons.Left && ModifierKeys.HasFlag(Keys.Control))
-            {
-                isDragging = true;
-                dragStart = e.Location;
-                dragRect = new Rectangle(e.X, e.Y, 0, 0);
+            // 사용자가 줌/팬을 했을 때
+            isUserZooming = true;
 
-                if (selectionSpan != null)
+            // Y축 자동 조정
+            AutoScaleYAxis();
+
+            // 현재 축 상태 저장
+            lastAxisLimits = formsPlot.Plot.GetAxisLimits();
+        }
+
+        private void AutoScaleYAxis()
+        {
+            var limits = formsPlot.Plot.GetAxisLimits();
+            double xMin = limits.XMin;
+            double xMax = limits.XMax;
+
+            double yMin = double.MaxValue;
+            double yMax = double.MinValue;
+            bool hasVisibleData = false;
+
+            // 모든 플롯의 현재 보이는 영역 데이터 확인
+            foreach (var plot in allPlots)
+            {
+                if (plot.Xs == null || plot.Xs.Length == 0) continue;
+
+                for (int i = 0; i < plot.Xs.Length; i++)
                 {
-                    formsPlot.Plot.Remove(selectionSpan);
-                    selectionSpan = null;
+                    if (plot.Xs[i] >= xMin && plot.Xs[i] <= xMax)
+                    {
+                        if (!double.IsNaN(plot.Ys[i]) && !double.IsInfinity(plot.Ys[i]))
+                        {
+                            yMin = Math.Min(yMin, plot.Ys[i]);
+                            yMax = Math.Max(yMax, plot.Ys[i]);
+                            hasVisibleData = true;
+                        }
+                    }
                 }
-                selectedPoints.Clear();
+            }
+
+            if (hasVisibleData)
+            {
+                // Y축 여백 추가 (10%)
+                double yPadding = (yMax - yMin) * 0.1;
+                if (yPadding == 0) yPadding = Math.Abs(yMax) * 0.1;
+                if (yPadding == 0) yPadding = 1;
+
+                formsPlot.Plot.SetAxisLimits(
+                    xMin: xMin,
+                    xMax: xMax,
+                    yMin: yMin - yPadding,
+                    yMax: yMax + yPadding
+                );
             }
         }
 
@@ -229,133 +351,186 @@ namespace CsvTimeSeriesViewer
             }
             else
             {
-                var coords = formsPlot.GetMouseCoordinates();
-                double mouseX = coords.x;
-                double mouseY = coords.y;
+                UpdateHoverInfo(e);
+            }
+        }
 
-                bool pointFound = false;
-                double nearestDistance = double.MaxValue;
-                string nearestFile = "";
-                string nearestColumn = "";
-                DateTime nearestTime = DateTime.MinValue;
-                double nearestValue = 0;
-                double nearestPlotX = 0;
-                double nearestPlotY = 0;
-                Color nearestColor = Color.Black;
+        private void UpdateHoverInfo(MouseEventArgs e)
+        {
+            var coords = formsPlot.GetMouseCoordinates();
+            double mouseX = coords.x;
+            double mouseY = coords.y;
 
-                var limits = formsPlot.Plot.GetAxisLimits();
-                double xSpan = limits.XMax - limits.XMin;
-                double ySpan = limits.YMax - limits.YMin;
+            bool pointFound = false;
+            double nearestDistance = double.MaxValue;
+            string nearestFile = "";
+            string nearestColumn = "";
+            DateTime nearestTime = DateTime.MinValue;
+            double nearestValue = 0;
+            double nearestPlotX = 0;
+            double nearestPlotY = 0;
+            Color nearestColor = Color.Black;
 
-                // 모든 파일의 데이터를 직접 검색
-                foreach (var file in csvFiles)
+            var limits = formsPlot.Plot.GetAxisLimits();
+            double xSpan = limits.XMax - limits.XMin;
+            double ySpan = limits.YMax - limits.YMin;
+
+            // 모든 파일의 데이터를 직접 검색
+            foreach (var file in csvFiles)
+            {
+                var fileInfo = file.Value;
+                if (fileInfo.Timestamps.Count == 0) continue;
+
+                // 마우스 X에 가장 가까운 시간 인덱스 찾기
+                int closestTimeIdx = -1;
+                double minTimeDiff = double.MaxValue;
+
+                for (int i = 0; i < fileInfo.Timestamps.Count; i++)
                 {
-                    var fileInfo = file.Value;
-                    if (fileInfo.Timestamps.Count == 0) continue;
-
-                    // 마우스 X에 가장 가까운 시간 인덱스 찾기
-                    int closestTimeIdx = -1;
-                    double minTimeDiff = double.MaxValue;
-
-                    for (int i = 0; i < fileInfo.Timestamps.Count; i++)
+                    double timeOA = fileInfo.Timestamps[i].ToOADate();
+                    double diff = Math.Abs(timeOA - mouseX);
+                    if (diff < minTimeDiff)
                     {
-                        double timeOA = fileInfo.Timestamps[i].ToOADate();
-                        double diff = Math.Abs(timeOA - mouseX);
-                        if (diff < minTimeDiff)
-                        {
-                            minTimeDiff = diff;
-                            closestTimeIdx = i;
-                        }
+                        minTimeDiff = diff;
+                        closestTimeIdx = i;
                     }
+                }
 
-                    if (closestTimeIdx == -1) continue;
+                if (closestTimeIdx == -1) continue;
 
-                    // 해당 시간의 모든 컬럼 값 확인
-                    foreach (var column in fileInfo.DataColumns)
+                // 해당 시간의 모든 컬럼 값 확인
+                foreach (var column in fileInfo.DataColumns)
+                {
+                    if (!fileInfo.SelectedColumns.Contains(column.Key)) continue;
+                    if (closestTimeIdx >= column.Value.Count) continue;
+
+                    double value = column.Value[closestTimeIdx];
+                    if (double.IsNaN(value) || double.IsInfinity(value)) continue;
+
+                    double timeOA = fileInfo.Timestamps[closestTimeIdx].ToOADate();
+
+                    // 화면 범위 체크
+                    if (timeOA < limits.XMin || timeOA > limits.XMax) continue;
+                    if (value < limits.YMin || value > limits.YMax) continue;
+
+                    // 정규화된 거리 계산
+                    double xDist = (timeOA - mouseX) / xSpan;
+                    double yDist = (value - mouseY) / ySpan;
+                    double distance = Math.Sqrt(xDist * xDist + yDist * yDist);
+
+                    if (distance < nearestDistance)
                     {
-                        if (!fileInfo.SelectedColumns.Contains(column.Key)) continue;
-                        if (closestTimeIdx >= column.Value.Count) continue;
+                        nearestDistance = distance;
+                        nearestFile = fileInfo.FileName;
+                        nearestColumn = column.Key;
+                        nearestTime = fileInfo.Timestamps[closestTimeIdx];
+                        nearestValue = value;
+                        nearestPlotX = timeOA;
+                        nearestPlotY = value;
+                        pointFound = true;
 
-                        double value = column.Value[closestTimeIdx];
-                        if (double.IsNaN(value) || double.IsInfinity(value)) continue;
-
-                        double timeOA = fileInfo.Timestamps[closestTimeIdx].ToOADate();
-
-                        // 화면 범위 체크
-                        if (timeOA < limits.XMin || timeOA > limits.XMax) continue;
-                        if (value < limits.YMin || value > limits.YMax) continue;
-
-                        // 정규화된 거리 계산
-                        double xDist = (timeOA - mouseX) / xSpan;
-                        double yDist = (value - mouseY) / ySpan;
-                        double distance = Math.Sqrt(xDist * xDist + yDist * yDist);
-
-                        if (distance < nearestDistance)
+                        // 해당 플롯의 색상 찾기
+                        string label = $"{Path.GetFileNameWithoutExtension(fileInfo.FileName)}: {column.Key}";
+                        foreach (var plot in allPlots)
                         {
-                            nearestDistance = distance;
-                            nearestFile = fileInfo.FileName;
-                            nearestColumn = column.Key;
-                            nearestTime = fileInfo.Timestamps[closestTimeIdx];
-                            nearestValue = value;
-                            nearestPlotX = timeOA;
-                            nearestPlotY = value;
-                            pointFound = true;
-
-                            // 해당 플롯의 색상 찾기
-                            string label = $"{Path.GetFileNameWithoutExtension(fileInfo.FileName)}: {column.Key}";
-                            foreach (var plot in allPlots)
+                            if (plot.Label == label)
                             {
-                                if (plot.Label == label)
-                                {
-                                    nearestColor = plot.Color;
-                                    break;
-                                }
+                                nearestColor = plot.Color;
+                                break;
                             }
                         }
                     }
                 }
+            }
 
-                if (nearestDistance > 0.05)
+            if (nearestDistance > 0.05)
+            {
+                pointFound = false;
+            }
+
+            if (pointFound)
+            {
+                // 크로스헤어 업데이트
+                crossHair.X = nearestPlotX;
+                crossHair.Y = nearestPlotY;
+                crossHair.IsVisible = true;
+
+                // 하이라이트 마커 업데이트
+                highlightMarker.X = nearestPlotX;
+                highlightMarker.Y = nearestPlotY;
+                highlightMarker.MarkerColor = nearestColor;
+                highlightMarker.IsVisible = true;
+
+                // 하이라이트 텍스트
+                highlightText.Label = $"{nearestValue:G4}";
+                highlightText.X = nearestPlotX;
+                highlightText.Y = nearestPlotY;
+                highlightText.Alignment = Alignment.LowerLeft;
+                highlightText.Color = nearestColor;
+                highlightText.IsVisible = true;
+
+                // 정보 패널 업데이트
+                UpdateInfoPanel(nearestFile, nearestColumn, nearestTime, nearestValue);
+            }
+            else
+            {
+                crossHair.IsVisible = false;
+                highlightMarker.IsVisible = false;
+                highlightText.IsVisible = false;
+            }
+
+            formsPlot.Refresh();
+        }
+
+        private void UpdateInfoPanel(string file, string column, DateTime time, double value)
+        {
+            string unit = GuessUnit(column);
+            string info = $"파일: {Path.GetFileNameWithoutExtension(file)}\n" +
+                         $"컬럼: {column}\n" +
+                         $"시간: {time:yyyy-MM-dd HH:mm:ss}\n" +
+                         $"값: {FormatValue(value, unit)}";
+
+            if (column.Contains("Pressure", StringComparison.OrdinalIgnoreCase) ||
+                column.Contains("Torr", StringComparison.OrdinalIgnoreCase))
+            {
+                var vacuumLevel = PressureAnalysisTools.GetVacuumLevel(value);
+                info += $"\n진공 레벨: {vacuumLevel}";
+            }
+
+            if (rtbDataInfo.InvokeRequired)
+            {
+                rtbDataInfo.Invoke((MethodInvoker)delegate { rtbDataInfo.Text = info; });
+            }
+            else
+            {
+                rtbDataInfo.Text = info;
+            }
+        }
+
+        private string FormatValue(double value, string unit)
+        {
+            if (unit.Contains("Torr") && value < 1e-3)
+                return $"{value:E2} {unit}";
+            else if (Math.Abs(value) < 0.01 || Math.Abs(value) > 10000)
+                return $"{value:E2} {unit}";
+            else
+                return $"{value:F2} {unit}";
+        }
+
+        private void FormsPlot_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left && ModifierKeys.HasFlag(Keys.Control))
+            {
+                isDragging = true;
+                dragStart = e.Location;
+                dragRect = new Rectangle(e.X, e.Y, 0, 0);
+
+                if (selectionSpan != null)
                 {
-                    pointFound = false;
+                    formsPlot.Plot.Remove(selectionSpan);
+                    selectionSpan = null;
                 }
-
-                if (pointFound)
-                {
-                    // 크로스헤어 업데이트
-                    crossHair.X = nearestPlotX;
-                    crossHair.Y = nearestPlotY;
-                    crossHair.IsVisible = true;
-
-                    // 하이라이트 마커 업데이트
-                    highlightMarker.X = nearestPlotX;
-                    highlightMarker.Y = nearestPlotY;
-                    highlightMarker.MarkerColor = nearestColor;
-                    highlightMarker.IsVisible = true;
-
-                    lblCrosshair.Text = $"파일: {Path.GetFileNameWithoutExtension(nearestFile)}\n" +
-                                       $"컬럼: {nearestColumn}\n" +
-                                       $"시간: {nearestTime:yyyy-MM-dd HH:mm:ss}\n" +
-                                       $"값: {nearestValue:G6}";
-                    lblCrosshair.Visible = true;
-
-                    // 하이라이트 텍스트
-                    highlightText.Label = $"{nearestValue:G4}";
-                    highlightText.X = nearestPlotX;
-                    highlightText.Y = nearestPlotY;
-                    highlightText.Alignment = Alignment.LowerLeft;
-                    highlightText.Color = nearestColor;
-                    highlightText.IsVisible = true;
-                }
-                else
-                {
-                    crossHair.IsVisible = false;
-                    highlightMarker.IsVisible = false;
-                    highlightText.IsVisible = false;
-                    lblCrosshair.Visible = false;
-                }
-
-                formsPlot.Refresh();
+                selectedPoints.Clear();
             }
         }
 
@@ -391,6 +566,7 @@ namespace CsvTimeSeriesViewer
                     // 선택 영역으로 즉시 줌
                     formsPlot.Plot.SetAxisLimits(xMin, xMax, yMin, yMax);
                     chkAutoScale.Checked = false; // 자동 스케일 해제
+                    isUserZooming = true;
                     formsPlot.Refresh();
                 }
                 else
@@ -419,6 +595,7 @@ namespace CsvTimeSeriesViewer
             if (e.Button == MouseButtons.Left)
             {
                 formsPlot.Plot.AxisAuto();
+                isUserZooming = false;
                 formsPlot.Refresh();
             }
         }
@@ -440,35 +617,11 @@ namespace CsvTimeSeriesViewer
             else if (e.KeyCode == Keys.R && !e.Control && !e.Shift)
             {
                 chkAutoScale.Checked = true;
+                isUserZooming = false;
                 UpdatePlot();
             }
         }
 
-        private int FindClosestXIndex(double[] xs, double targetX)
-        {
-            int left = 0;
-            int right = xs.Length - 1;
-
-            while (left <= right)
-            {
-                int mid = (left + right) / 2;
-
-                if (xs[mid] == targetX)
-                    return mid;
-
-                if (xs[mid] < targetX)
-                    left = mid + 1;
-                else
-                    right = mid - 1;
-            }
-
-            if (right < 0) return 0;
-            if (left >= xs.Length) return xs.Length - 1;
-
-            return (targetX - xs[right] < xs[left] - targetX) ? right : left;
-        }
-
-        // SelectPointsInRegion 메서드 수정
         private void SelectPointsInRegion(double xMin, double xMax, double yMin, double yMax)
         {
             selectedPoints.Clear();
@@ -492,7 +645,6 @@ namespace CsvTimeSeriesViewer
 
                                 if (y >= yMin && y <= yMax)
                                 {
-                                    // 수정된 부분: 클래스 사용
                                     selectedPoints.Add(new SelectedPointData
                                     {
                                         X = x,
@@ -517,7 +669,6 @@ namespace CsvTimeSeriesViewer
             info.AppendLine($"선택된 데이터 포인트: {selectedPoints.Count}개");
             info.AppendLine();
 
-            // 수정된 부분: 프로퍼티 사용
             var grouped = selectedPoints.GroupBy(p => p.File)
                                        .ToDictionary(g => g.Key,
                                                     g => g.GroupBy(p => p.Column)
@@ -528,7 +679,7 @@ namespace CsvTimeSeriesViewer
                 info.AppendLine($"파일: {file.Key}");
                 foreach (var column in file.Value)
                 {
-                    var values = column.Value.Select(p => p.Y).ToList();  // 수정됨
+                    var values = column.Value.Select(p => p.Y).ToList();
                     info.AppendLine($"  {column.Key}:");
                     info.AppendLine($"    개수: {values.Count}");
                     info.AppendLine($"    최소: {values.Min():G6}");
@@ -589,7 +740,6 @@ namespace CsvTimeSeriesViewer
                     var lines = new List<string>();
                     lines.Add("Timestamp,File,Column,Value");
 
-                    // 수정된 부분: 프로퍼티 사용
                     foreach (var point in selectedPoints.OrderBy(p => p.X))
                     {
                         DateTime time = DateTime.FromOADate(point.X);
@@ -613,8 +763,9 @@ namespace CsvTimeSeriesViewer
                 var zoomToSelection = new ToolStripMenuItem("선택 영역으로 확대");
                 zoomToSelection.Click += (s, ev) =>
                 {
-                    formsPlot.Plot.SetAxisLimits(selectionSpan.DragLimitMin, selectionSpan.DragLimitMax);
+                    formsPlot.Plot.SetAxisLimits(selectionSpan.Min, selectionSpan.Max);
                     chkAutoScale.Checked = false;
+                    isUserZooming = true;
                     formsPlot.Refresh();
                 };
                 cm.Items.Add(zoomToSelection);
@@ -629,32 +780,45 @@ namespace CsvTimeSeriesViewer
                 };
                 cm.Items.Add(clearSelection);
 
-                var showOnlySelection = new ToolStripMenuItem("선택 영역만 표시");
-                showOnlySelection.Click += (s, ev) =>
-                {
-                    ShowOnlySelectedTimeRange(selectionSpan.DragLimitMin, selectionSpan.DragLimitMax);
-                };
-                cm.Items.Add(showOnlySelection);
-
                 cm.Items.Add(new ToolStripSeparator());
             }
 
             var autoAxis = new ToolStripMenuItem("자동 축 조정");
-            autoAxis.Click += (s, ev) => { formsPlot.Plot.AxisAuto(); formsPlot.Refresh(); };
+            autoAxis.Click += (s, ev) =>
+            {
+                formsPlot.Plot.AxisAuto();
+                isUserZooming = false;
+                formsPlot.Refresh();
+            };
             cm.Items.Add(autoAxis);
 
             var resetZoom = new ToolStripMenuItem("전체 데이터 보기");
             resetZoom.Click += (s, ev) =>
             {
                 chkAutoScale.Checked = true;
+                isUserZooming = false;
                 UpdatePlot();
             };
             cm.Items.Add(resetZoom);
 
-            var logScale = new ToolStripMenuItem("Y축 로그 스케일");
-            logScale.Checked = isLogScale;
-            logScale.Click += (s, ev) => { ToggleLogScale(); };
-            cm.Items.Add(logScale);
+            cm.Items.Add(new ToolStripSeparator());
+
+            // 시간 범위 메뉴
+            var timeRangeMenu = new ToolStripMenuItem("시간 범위");
+
+            var last1Hour = new ToolStripMenuItem("최근 1시간");
+            last1Hour.Click += (s, ev) => SetTimeRange(1);
+            timeRangeMenu.DropDownItems.Add(last1Hour);
+
+            var last3Hours = new ToolStripMenuItem("최근 3시간");
+            last3Hours.Click += (s, ev) => SetTimeRange(3);
+            timeRangeMenu.DropDownItems.Add(last3Hours);
+
+            var last24Hours = new ToolStripMenuItem("최근 24시간");
+            last24Hours.Click += (s, ev) => SetTimeRange(24);
+            timeRangeMenu.DropDownItems.Add(last24Hours);
+
+            cm.Items.Add(timeRangeMenu);
 
             cm.Items.Add(new ToolStripSeparator());
 
@@ -666,55 +830,18 @@ namespace CsvTimeSeriesViewer
             exportData.Click += (s, ev) => ExportPlotData();
             cm.Items.Add(exportData);
 
-            cm.Items.Add(new ToolStripSeparator());
-
-            var gridToggle = new ToolStripMenuItem("그리드 표시");
-            gridToggle.Checked = true;
-            gridToggle.Click += (s, ev) =>
-            {
-                formsPlot.Plot.Grid(!gridToggle.Checked);
-                formsPlot.Refresh();
-            };
-            cm.Items.Add(gridToggle);
-
-            var legendToggle = new ToolStripMenuItem("범례 표시");
-            legendToggle.Checked = isLegendVisible;
-            legendToggle.Click += (s, ev) =>
-            {
-                isLegendVisible = !isLegendVisible;
-                UpdatePlot();
-            };
-            cm.Items.Add(legendToggle);
-
             cm.Show(formsPlot, location);
         }
 
-        private void ShowOnlySelectedTimeRange(double xMin, double xMax)
+        private void SetTimeRange(int hours)
         {
-            DateTime startTime = DateTime.FromOADate(xMin);
-            DateTime endTime = DateTime.FromOADate(xMax);
+            double now = DateTime.Now.ToOADate();
+            double start = DateTime.Now.AddHours(-hours).ToOADate();
 
-            formsPlot.Plot.SetAxisLimits(xMin, xMax);
-            chkAutoScale.Checked = false;
-
-            if (selectionSpan != null)
-            {
-                formsPlot.Plot.Remove(selectionSpan);
-                selectionSpan = null;
-            }
-
+            formsPlot.Plot.SetAxisLimits(xMin: start, xMax: now);
+            isUserZooming = true;
+            AutoScaleYAxis();
             formsPlot.Refresh();
-
-            MessageBox.Show($"선택한 시간 범위로 확대되었습니다.\n" +
-                            $"시작: {startTime:yyyy-MM-dd HH:mm:ss}\n" +
-                            $"종료: {endTime:yyyy-MM-dd HH:mm:ss}",
-                            "시간 범위 선택", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-
-        private void ToggleLogScale()
-        {
-            isLogScale = !isLogScale;
-            UpdatePlot();
         }
 
         private void SavePlotImage()
@@ -770,7 +897,8 @@ namespace CsvTimeSeriesViewer
                     {
                         foreach (var col in fileInfo.DataColumns)
                         {
-                            if (i < col.Value.Count && !double.IsNaN(col.Value[i]))
+                            if (fileInfo.SelectedColumns.Contains(col.Key) &&
+                                i < col.Value.Count && !double.IsNaN(col.Value[i]))
                             {
                                 lines.Add($"{fileInfo.Timestamps[i]:yyyy-MM-dd HH:mm:ss}," +
                                          $"{fileInfo.FileName},{col.Key},{col.Value[i]}");
@@ -910,6 +1038,9 @@ namespace CsvTimeSeriesViewer
                                 break;
                             }
                         }
+
+                        // 숫자 컬럼 자동 감지
+                        DetectNumericColumns(fileInfo);
                     }
                 }
             }
@@ -917,6 +1048,71 @@ namespace CsvTimeSeriesViewer
             {
                 MessageBox.Show($"헤더 읽기 오류 ({fileInfo.FileName}): {ex.Message}",
                               "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void DetectNumericColumns(CsvFileInfo fileInfo)
+        {
+            try
+            {
+                using (var fs = new FileStream(fileInfo.FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (var reader = new StreamReader(fs))
+                {
+                    reader.ReadLine(); // Skip header
+
+                    // 최대 10개 행을 읽어서 데이터 타입 확인
+                    int sampleRows = 0;
+                    var numericColumns = new Dictionary<string, int>();
+
+                    foreach (var header in fileInfo.Headers)
+                    {
+                        numericColumns[header] = 0;
+                    }
+
+                    string line;
+                    while ((line = reader.ReadLine()) != null && sampleRows < 10)
+                    {
+                        string[] values = line.Split(',');
+
+                        for (int i = 0; i < Math.Min(values.Length, fileInfo.Headers.Count); i++)
+                        {
+                            string value = values[i].Trim();
+                            double numValue;
+
+                            // 숫자로 변환 가능한지 확인
+                            if (TryParseValue(value, out numValue) && !double.IsNaN(numValue))
+                            {
+                                numericColumns[fileInfo.Headers[i]]++;
+                            }
+                        }
+
+                        sampleRows++;
+                    }
+
+                    // 50% 이상이 숫자인 컬럼을 숫자 컬럼으로 판단
+                    foreach (var header in fileInfo.Headers)
+                    {
+                        bool isNumeric = numericColumns[header] >= sampleRows / 2;
+                        columnIsNumeric[header] = isNumeric;
+
+                        // 자동으로 숫자 컬럼 선택 (시간 컬럼 제외)
+                        if (isNumeric && fileInfo.Headers.IndexOf(header) != fileInfo.TimeColumnIndex)
+                        {
+                            // 압력 관련 컬럼 우선 선택
+                            if (header.Contains("Pressure", StringComparison.OrdinalIgnoreCase) ||
+                                header.Contains("Ion", StringComparison.OrdinalIgnoreCase) ||
+                                header.Contains("Pirani", StringComparison.OrdinalIgnoreCase) ||
+                                header.Contains("ATM", StringComparison.OrdinalIgnoreCase))
+                            {
+                                fileInfo.SelectedColumns.Add(header);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"숫자 컬럼 감지 오류: {ex.Message}");
             }
         }
 
@@ -945,32 +1141,48 @@ namespace CsvTimeSeriesViewer
                 };
                 fileNode.Nodes.Add(timeNode);
 
+                // 숫자 컬럼들을 먼저 추가
+                var numericColumns = new List<TreeNode>();
+                var textColumns = new List<TreeNode>();
+
                 for (int i = 0; i < file.Headers.Count; i++)
                 {
-                    var columnNode = new TreeNode(file.Headers[i])
+                    if (i == file.TimeColumnIndex) continue; // 시간 컬럼은 제외
+
+                    var header = file.Headers[i];
+                    var columnNode = new TreeNode(header)
                     {
                         Tag = i,
-                        Checked = file.SelectedColumns.Contains(file.Headers[i])
+                        Checked = file.SelectedColumns.Contains(header)
                     };
 
-                    if (file.SelectedColumns.Count == 0 &&
-                        (file.Headers[i].Contains("Pressure", StringComparison.OrdinalIgnoreCase) ||
-                         file.Headers[i].Contains("Ion", StringComparison.OrdinalIgnoreCase) ||
-                         file.Headers[i].Contains("Pirani", StringComparison.OrdinalIgnoreCase) ||
-                         file.Headers[i].Contains("ATM", StringComparison.OrdinalIgnoreCase)))
+                    // 숫자/텍스트 구분하여 표시
+                    if (columnIsNumeric.ContainsKey(header) && columnIsNumeric[header])
                     {
-                        columnNode.Checked = true;
-                        file.SelectedColumns.Add(file.Headers[i]);
+                        columnNode.ForeColor = Color.DarkGreen;
+                        columnNode.Text = $"📊 {header}";
+                        numericColumns.Add(columnNode);
+                    }
+                    else
+                    {
+                        columnNode.ForeColor = Color.Gray;
+                        columnNode.Text = $"📝 {header}";
+                        textColumns.Add(columnNode);
                     }
 
-                    if (file.Filters.ContainsKey(file.Headers[i]) && file.Filters[file.Headers[i]].Enabled)
+                    // 필터 표시
+                    if (file.Filters.ContainsKey(header) && file.Filters[header].Enabled)
                     {
                         columnNode.ForeColor = Color.Red;
                         columnNode.Text += " [필터]";
                     }
-
-                    fileNode.Nodes.Add(columnNode);
                 }
+
+                // 숫자 컬럼 먼저, 그 다음 텍스트 컬럼 추가
+                foreach (var node in numericColumns)
+                    fileNode.Nodes.Add(node);
+                foreach (var node in textColumns)
+                    fileNode.Nodes.Add(node);
 
                 fileNode.Expand();
                 trvColumns.Nodes.Add(fileNode);
@@ -985,7 +1197,8 @@ namespace CsvTimeSeriesViewer
             {
                 foreach (TreeNode childNode in e.Node.Nodes)
                 {
-                    if (childNode.Tag.ToString() != "TIME_COLUMN")
+                    if (childNode.Tag.ToString() != "TIME_COLUMN" &&
+                        childNode.Text.StartsWith("📊")) // 숫자 컬럼만
                     {
                         childNode.Checked = e.Node.Checked;
                     }
@@ -1007,6 +1220,15 @@ namespace CsvTimeSeriesViewer
                     {
                         int columnIndex = (int)e.Node.Tag;
                         string columnName = fileInfo.Headers[columnIndex];
+
+                        // 텍스트 컬럼은 선택 불가
+                        if (!columnIsNumeric.ContainsKey(columnName) || !columnIsNumeric[columnName])
+                        {
+                            e.Node.Checked = false;
+                            MessageBox.Show("숫자 데이터가 아닌 컬럼은 선택할 수 없습니다.",
+                                          "알림", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            return;
+                        }
 
                         if (e.Node.Checked)
                         {
@@ -1156,6 +1378,7 @@ namespace CsvTimeSeriesViewer
                 this.Invoke((MethodInvoker)delegate
                 {
                     UpdatePlot();
+                    UpdateCurrentValues();
                 });
             }
             catch (Exception ex)
@@ -1165,6 +1388,74 @@ namespace CsvTimeSeriesViewer
                     lblStatus.Text = $"오류: {ex.Message}";
                     lblStatus.ForeColor = Color.Red;
                 });
+            }
+        }
+
+        private void UpdateCurrentValues()
+        {
+            dgvCurrentValues.Rows.Clear();
+
+            foreach (var file in csvFiles)
+            {
+                var fileInfo = file.Value;
+                if (fileInfo.Timestamps.Count == 0) continue;
+
+                // 마지막 데이터 인덱스
+                int lastIdx = fileInfo.Timestamps.Count - 1;
+
+                foreach (var column in fileInfo.DataColumns)
+                {
+                    if (!fileInfo.SelectedColumns.Contains(column.Key)) continue;
+                    if (lastIdx >= column.Value.Count) continue;
+
+                    double value = column.Value[lastIdx];
+                    if (double.IsNaN(value)) continue;
+
+                    string unit = GuessUnit(column.Key);
+                    string status = "정상";
+                    Color statusColor = Color.Green;
+
+                    // 압력 데이터 상태 판단
+                    if (column.Key.Contains("Pressure", StringComparison.OrdinalIgnoreCase) ||
+                        column.Key.Contains("Torr", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var vacuumLevel = PressureAnalysisTools.GetVacuumLevel(value);
+
+                        if (vacuumLevel == PressureAnalysisTools.VacuumLevel.Atmospheric)
+                        {
+                            status = "대기압";
+                            statusColor = Color.Red;
+                        }
+                        else if (vacuumLevel == PressureAnalysisTools.VacuumLevel.RoughVacuum)
+                        {
+                            status = "저진공";
+                            statusColor = Color.Orange;
+                        }
+                        else if (vacuumLevel == PressureAnalysisTools.VacuumLevel.MediumVacuum ||
+                                vacuumLevel == PressureAnalysisTools.VacuumLevel.HighVacuum)
+                        {
+                            status = "진공";
+                            statusColor = Color.Green;
+                        }
+                        else
+                        {
+                            status = "고진공";
+                            statusColor = Color.Blue;
+                        }
+                    }
+
+                    int rowIdx = dgvCurrentValues.Rows.Add(
+                        Path.GetFileNameWithoutExtension(fileInfo.FileName),
+                        column.Key,
+                        FormatValue(value, ""),
+                        unit,
+                        status
+                    );
+
+                    dgvCurrentValues.Rows[rowIdx].Cells["Status"].Style.ForeColor = statusColor;
+                    dgvCurrentValues.Rows[rowIdx].Cells["Status"].Style.Font =
+                        new Font(dgvCurrentValues.Font, FontStyle.Bold);
+                }
             }
         }
 
@@ -1353,7 +1644,7 @@ namespace CsvTimeSeriesViewer
                 int totalPoints = 0;
                 int totalColumns = 0;
 
-                // 단순화된 컬럼 그룹 클래스
+                // 단위별로 그룹화
                 var columnGroups = new Dictionary<string, List<Tuple<string, string, List<double>, List<DateTime>>>>();
 
                 foreach (var file in csvFiles)
@@ -1415,7 +1706,7 @@ namespace CsvTimeSeriesViewer
                         {
                             if (xSegments[segIdx].Count > 0)
                             {
-                                var signal = formsPlot.Plot.AddScatterLines(
+                                var signal = formsPlot.Plot.AddSignalXY(
                                     xSegments[segIdx].ToArray(),
                                     ySegments[segIdx].ToArray());
 
@@ -1457,9 +1748,15 @@ namespace CsvTimeSeriesViewer
 
                 formsPlot.Plot.XAxis.DateTimeFormat(true);
 
-                if (!chkAutoScale.Checked && hadValidLimits)
+                // 자동 스케일 또는 사용자 줌 처리
+                if (!chkAutoScale.Checked && hadValidLimits && !isUserZooming)
                 {
                     formsPlot.Plot.SetAxisLimits(existingLimits);
+                }
+                else if (isUserZooming)
+                {
+                    // 사용자가 줌/팬 중일 때
+                    AutoScaleYAxis();
                 }
                 else if (chkSyncTimeAxis.Checked)
                 {
@@ -1516,6 +1813,8 @@ namespace CsvTimeSeriesViewer
 
             if (columnName.Contains("pressure") || columnName.Contains("torr"))
                 return "압력 (Torr)";
+            else if (columnName.Contains("kpa"))
+                return "압력 (kPa)";
             else if (columnName.Contains("temperature") || columnName.Contains("temp"))
                 return "온도 (°C)";
             else if (columnName.Contains("flow"))
@@ -1551,6 +1850,10 @@ namespace CsvTimeSeriesViewer
 
         private void ChkAutoScale_CheckedChanged(object sender, EventArgs e)
         {
+            if (chkAutoScale.Checked)
+            {
+                isUserZooming = false;
+            }
             UpdatePlot();
         }
 
@@ -1615,7 +1918,8 @@ namespace CsvTimeSeriesViewer
                 results.AppendLine($"파일: {file.Value.FileName}");
 
                 var pressureColumns = file.Value.Headers.Where(h =>
-                    h.Contains("Pressure", StringComparison.OrdinalIgnoreCase)).ToList();
+                    h.Contains("Pressure", StringComparison.OrdinalIgnoreCase) ||
+                    h.Contains("Torr", StringComparison.OrdinalIgnoreCase)).ToList();
 
                 foreach (var col in pressureColumns)
                 {
@@ -1675,7 +1979,8 @@ namespace CsvTimeSeriesViewer
                 report.AppendLine(new string('-', 30));
 
                 var pressureColumns = file.Value.Headers.Where(h =>
-                    h.Contains("Pressure", StringComparison.OrdinalIgnoreCase)).ToList();
+                    h.Contains("Pressure", StringComparison.OrdinalIgnoreCase) ||
+                    h.Contains("Torr", StringComparison.OrdinalIgnoreCase)).ToList();
 
                 foreach (var col in pressureColumns)
                 {
@@ -1706,5 +2011,17 @@ namespace CsvTimeSeriesViewer
 
             return report.ToString();
         }
+    }
+
+    /// <summary>
+    /// 선택된 데이터 포인트를 나타내는 클래스
+    /// </summary>
+    public class SelectedPointData
+    {
+        public double X { get; set; }
+        public double Y { get; set; }
+        public string Label { get; set; }
+        public string File { get; set; }
+        public string Column { get; set; }
     }
 }

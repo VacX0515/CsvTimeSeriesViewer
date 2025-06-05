@@ -18,6 +18,7 @@ namespace CsvTimeSeriesViewer
         public int TimeColumnIndex { get; set; }
         public HashSet<string> SelectedColumns { get; set; }
         public Dictionary<string, DataFilter> Filters { get; set; }
+        public int LastProcessedLine { get; set; } // 마지막으로 처리한 라인 번호 (DataStreamer 사용 시)
 
         public CsvFileInfo()
         {
@@ -27,6 +28,7 @@ namespace CsvTimeSeriesViewer
             SelectedColumns = new HashSet<string>();
             Filters = new Dictionary<string, DataFilter>();
             TimeColumnIndex = -1; // -1 means use row number
+            LastProcessedLine = 0;
         }
     }
 }
