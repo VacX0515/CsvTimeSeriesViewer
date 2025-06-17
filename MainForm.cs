@@ -564,7 +564,7 @@ namespace CsvTimeSeriesViewer
                 if (ModifierKeys.HasFlag(Keys.Shift))
                 {
                     // 선택 영역으로 즉시 줌
-                    formsPlot.Plot.SetAxisLimits(xMin, xMax, yMin, yMax);
+                    formsPlot.Plot.SetAxisLimits(xMin: xMin, xMax: xMax, yMin: yMin, yMax: yMax);
                     chkAutoScale.Checked = false; // 자동 스케일 해제
                     isUserZooming = true;
                     formsPlot.Refresh();
@@ -763,7 +763,18 @@ namespace CsvTimeSeriesViewer
                 var zoomToSelection = new ToolStripMenuItem("선택 영역으로 확대");
                 zoomToSelection.Click += (s, ev) =>
                 {
-                    formsPlot.Plot.SetAxisLimits(selectionSpan.Min, selectionSpan.Max);
+                    // X축을 선택 영역으로 설정
+                    var currentLimits = formsPlot.Plot.GetAxisLimits();
+                    formsPlot.Plot.SetAxisLimits(
+                        xMin: selectionSpan.DragLimitMin,
+                        xMax: selectionSpan.DragLimitMax,
+                        yMin: currentLimits.YMin,
+                        yMax: currentLimits.YMax
+                    );
+
+                    // Y축 자동 조정
+                    AutoScaleYAxis();
+
                     chkAutoScale.Checked = false;
                     isUserZooming = true;
                     formsPlot.Refresh();
@@ -1447,7 +1458,7 @@ namespace CsvTimeSeriesViewer
                     int rowIdx = dgvCurrentValues.Rows.Add(
                         Path.GetFileNameWithoutExtension(fileInfo.FileName),
                         column.Key,
-                        FormatValue(value, ""),
+                        FormatValue(value, unit),
                         unit,
                         status
                     );
