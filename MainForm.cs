@@ -28,6 +28,8 @@ namespace CsvTimeSeriesViewer
         private Rectangle dragRect;
         private List<SelectedPointData> selectedPoints;
         private VSpan selectionSpan;
+        private double selectionXMin;
+        private double selectionXMax;
 
         // 다중 Y축 관련
         private Dictionary<string, int> columnToYAxisIndex;
@@ -36,6 +38,10 @@ namespace CsvTimeSeriesViewer
         // 기타 플래그
         private bool isLogScale = false;
         private bool isLegendVisible = true;
+        private bool isBottomPanelVisible = true;
+        private bool isTimeRangeEnabled = false;
+        private DateTime? customStartTime = null;
+        private DateTime? customEndTime = null;
 
         // 오른쪽 정보 패널
         private Panel pnlRightInfo;
@@ -49,6 +55,9 @@ namespace CsvTimeSeriesViewer
         // 줌/팬 상태 추적
         private bool isUserZooming = false;
         private AxisLimits lastAxisLimits;
+        private bool isProgrammaticChange = false;
+
+
 
         public MainForm()
         {
@@ -61,6 +70,9 @@ namespace CsvTimeSeriesViewer
                 columnToYAxisIndex = new Dictionary<string, int>();
                 yAxisColors = new List<Color> { Color.Black, Color.Blue, Color.Red, Color.Green, Color.Purple };
                 columnIsNumeric = new Dictionary<string, bool>();
+                selectionXMin = 0;
+                selectionXMax = 0;
+                isBottomPanelVisible = true;
                 SetupSplitContainers();
             }
             catch (Exception ex)
@@ -153,26 +165,9 @@ namespace CsvTimeSeriesViewer
 
         private void SetupSplitContainers()
         {
-            // splitMain의 너비를 조정하여 오른쪽 패널 공간 확보
-            if (splitMain != null && pnlRightInfo != null)
-            {
-                splitMain.Width = this.ClientSize.Width - pnlRightInfo.Width;
-            }
-
-            splitMain.SplitterMoved += (s, e) =>
-            {
-                if (splitMain.SplitterDistance < 50)
-                    splitMain.SplitterDistance = 0;
-            };
-
-            splitLeft.SplitterMoved += (s, e) =>
-            {
-                if (splitLeft.SplitterDistance < 50)
-                    splitLeft.SplitterDistance = 0;
-            };
-
-            splitMain.SplitterDistance = 500;
-            splitLeft.SplitterDistance = 250;
+            // 하단 패널 초기 설정
+            pnlBottom.Height = 260;
+            isBottomPanelVisible = true;
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -180,6 +175,13 @@ namespace CsvTimeSeriesViewer
             InitializePlot();
             StartUpdateTimer();
             InitializeAnalysisMenu();
+
+            // 초기값 설정
+            if (dtpStartTime != null && dtpEndTime != null)
+            {
+                dtpStartTime.Value = DateTime.Now.AddHours(-1);
+                dtpEndTime.Value = DateTime.Now;
+            }
         }
 
         private void InitializeAnalysisMenu()
@@ -270,13 +272,25 @@ namespace CsvTimeSeriesViewer
             highlightText.BackgroundColor = Color.FromArgb(200, Color.White);
             highlightText.IsVisible = false;
 
-            formsPlot.Refresh();
+            formsPlot.Render();
         }
 
         private void FormsPlot_AxesChanged(object sender, EventArgs e)
         {
+            // 프로그램에 의한 변경이면 무시
+            if (isProgrammaticChange) return;
+
+            // 시간 범위가 활성화되어 있으면 무시
+            if (isTimeRangeEnabled) return;
+
             // 사용자가 줌/팬을 했을 때
             isUserZooming = true;
+
+            // 자동 스케일 체크박스 해제
+            if (chkAutoScale.Checked)
+            {
+                chkAutoScale.Checked = false;
+            }
 
             // Y축 자동 조정
             AutoScaleYAxis();
@@ -321,12 +335,20 @@ namespace CsvTimeSeriesViewer
                 if (yPadding == 0) yPadding = Math.Abs(yMax) * 0.1;
                 if (yPadding == 0) yPadding = 1;
 
-                formsPlot.Plot.SetAxisLimits(
-                    xMin: xMin,
-                    xMax: xMax,
-                    yMin: yMin - yPadding,
-                    yMax: yMax + yPadding
-                );
+                isProgrammaticChange = true;
+                try
+                {
+                    formsPlot.Plot.SetAxisLimits(
+                        xMin: xMin,
+                        xMax: xMax,
+                        yMin: yMin - yPadding,
+                        yMax: yMax + yPadding
+                    );
+                }
+                finally
+                {
+                    isProgrammaticChange = false;
+                }
             }
         }
 
@@ -340,7 +362,7 @@ namespace CsvTimeSeriesViewer
                 int height = Math.Abs(e.Y - dragStart.Y);
                 dragRect = new Rectangle(x, y, width, height);
 
-                formsPlot.Refresh();
+                formsPlot.Render();
                 using (var g = formsPlot.CreateGraphics())
                 {
                     using (var pen = new Pen(Color.Blue, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
@@ -479,7 +501,7 @@ namespace CsvTimeSeriesViewer
                 highlightText.IsVisible = false;
             }
 
-            formsPlot.Refresh();
+            formsPlot.Render();
         }
 
         private void UpdateInfoPanel(string file, string column, DateTime time, double value)
@@ -497,9 +519,17 @@ namespace CsvTimeSeriesViewer
                 info += $"\n진공 레벨: {vacuumLevel}";
             }
 
+            // 시간 범위 정보 추가
+            if (isTimeRangeEnabled && customStartTime.HasValue && customEndTime.HasValue)
+            {
+                info += $"\n\n[시간 범위 설정됨]\n";
+                info += $"시작: {customStartTime.Value:yyyy-MM-dd HH:mm:ss}\n";
+                info += $"종료: {customEndTime.Value:yyyy-MM-dd HH:mm:ss}";
+            }
+
             if (rtbDataInfo.InvokeRequired)
             {
-                rtbDataInfo.Invoke((MethodInvoker)delegate { rtbDataInfo.Text = info; });
+                rtbDataInfo.BeginInvoke((MethodInvoker)delegate { rtbDataInfo.Text = info; });
             }
             else
             {
@@ -529,6 +559,8 @@ namespace CsvTimeSeriesViewer
                 {
                     formsPlot.Plot.Remove(selectionSpan);
                     selectionSpan = null;
+                    selectionXMin = 0;
+                    selectionXMax = 0;
                 }
                 selectedPoints.Clear();
             }
@@ -556,18 +588,26 @@ namespace CsvTimeSeriesViewer
                 // 드래그 영역이 너무 작으면 무시
                 if (Math.Abs(xMax - xMin) < 0.01 || Math.Abs(yMax - yMin) < 0.01)
                 {
-                    formsPlot.Refresh();
+                    formsPlot.Render();
                     return;
                 }
 
                 // Shift 키를 누른 상태면 선택 영역으로 줌
                 if (ModifierKeys.HasFlag(Keys.Shift))
                 {
-                    // 선택 영역으로 즉시 줌
-                    formsPlot.Plot.SetAxisLimits(xMin: xMin, xMax: xMax, yMin: yMin, yMax: yMax);
-                    chkAutoScale.Checked = false; // 자동 스케일 해제
-                    isUserZooming = true;
-                    formsPlot.Refresh();
+                    isProgrammaticChange = true;
+                    try
+                    {
+                        // 선택 영역으로 즉시 줌
+                        formsPlot.Plot.SetAxisLimits(xMin: xMin, xMax: xMax, yMin: yMin, yMax: yMax);
+                        chkAutoScale.Checked = false; // 자동 스케일 해제
+                        isUserZooming = true;
+                    }
+                    finally
+                    {
+                        isProgrammaticChange = false;
+                    }
+                    formsPlot.Render();
                 }
                 else
                 {
@@ -578,11 +618,13 @@ namespace CsvTimeSeriesViewer
                     {
                         selectionSpan = formsPlot.Plot.AddVerticalSpan(xMin, xMax);
                         selectionSpan.Color = Color.FromArgb(50, Color.Blue);
+                        selectionXMin = xMin;
+                        selectionXMax = xMax;
                         ShowSelectedPointsInfo();
                     }
                 }
 
-                formsPlot.Refresh();
+                formsPlot.Render();
             }
             else if (e.Button == MouseButtons.Right)
             {
@@ -594,9 +636,18 @@ namespace CsvTimeSeriesViewer
         {
             if (e.Button == MouseButtons.Left)
             {
-                formsPlot.Plot.AxisAuto();
-                isUserZooming = false;
-                formsPlot.Refresh();
+                isProgrammaticChange = true;
+                try
+                {
+                    formsPlot.Plot.AxisAuto();
+                    isUserZooming = false;
+                    chkAutoScale.Checked = true; // 자동 스케일 다시 켜기
+                }
+                finally
+                {
+                    isProgrammaticChange = false;
+                }
+                formsPlot.Render();
             }
         }
 
@@ -610,7 +661,9 @@ namespace CsvTimeSeriesViewer
                     formsPlot.Plot.Remove(selectionSpan);
                     selectionSpan = null;
                     selectedPoints.Clear();
-                    formsPlot.Refresh();
+                    selectionXMin = 0;
+                    selectionXMax = 0;
+                    formsPlot.Render();
                 }
             }
             // R 키로 전체 보기
@@ -619,6 +672,39 @@ namespace CsvTimeSeriesViewer
                 chkAutoScale.Checked = true;
                 isUserZooming = false;
                 UpdatePlot();
+            }
+            // T 키로 실시간 추적 토글
+            else if (e.KeyCode == Keys.T && !e.Control && !e.Shift)
+            {
+                if (isMonitoringEnabled)
+                {
+                    chkAutoScale.Checked = !chkAutoScale.Checked;
+                }
+            }
+            // Space 키로 일시정지/재개
+            else if (e.KeyCode == Keys.Space && !e.Control && !e.Shift)
+            {
+                BtnMonitoring_Click(null, null);
+            }
+            // D 키로 시간 범위 토글
+            else if (e.KeyCode == Keys.D && !e.Control && !e.Shift)
+            {
+                if (chkEnableTimeRange != null)
+                {
+                    chkEnableTimeRange.Checked = !chkEnableTimeRange.Checked;
+                }
+            }
+            // Ctrl+T로 시간 범위 설정 창으로 포커스
+            else if (e.KeyCode == Keys.T && e.Control && !e.Shift)
+            {
+                if (chkEnableTimeRange != null && !chkEnableTimeRange.Checked)
+                {
+                    chkEnableTimeRange.Checked = true;
+                }
+                if (dtpStartTime != null)
+                {
+                    dtpStartTime.Focus();
+                }
             }
         }
 
@@ -766,8 +852,8 @@ namespace CsvTimeSeriesViewer
                     // X축을 선택 영역으로 설정
                     var currentLimits = formsPlot.Plot.GetAxisLimits();
                     formsPlot.Plot.SetAxisLimits(
-                        xMin: selectionSpan.DragLimitMin,
-                        xMax: selectionSpan.DragLimitMax,
+                        xMin: selectionXMin,
+                        xMax: selectionXMax,
                         yMin: currentLimits.YMin,
                         yMax: currentLimits.YMax
                     );
@@ -777,7 +863,7 @@ namespace CsvTimeSeriesViewer
 
                     chkAutoScale.Checked = false;
                     isUserZooming = true;
-                    formsPlot.Refresh();
+                    formsPlot.Render();
                 };
                 cm.Items.Add(zoomToSelection);
 
@@ -787,19 +873,39 @@ namespace CsvTimeSeriesViewer
                     formsPlot.Plot.Remove(selectionSpan);
                     selectionSpan = null;
                     selectedPoints.Clear();
-                    formsPlot.Refresh();
+                    selectionXMin = 0;
+                    selectionXMax = 0;
+                    formsPlot.Render();
                 };
                 cm.Items.Add(clearSelection);
 
                 cm.Items.Add(new ToolStripSeparator());
             }
 
+            var resumeTracking = new ToolStripMenuItem("실시간 추적 재개");
+            resumeTracking.Click += (s, ev) =>
+            {
+                chkAutoScale.Checked = true;
+                isUserZooming = false;
+                UpdatePlot();
+            };
+            resumeTracking.Enabled = isMonitoringEnabled && (!chkAutoScale.Checked || isUserZooming);
+            cm.Items.Add(resumeTracking);
+
             var autoAxis = new ToolStripMenuItem("자동 축 조정");
             autoAxis.Click += (s, ev) =>
             {
-                formsPlot.Plot.AxisAuto();
-                isUserZooming = false;
-                formsPlot.Refresh();
+                isProgrammaticChange = true;
+                try
+                {
+                    formsPlot.Plot.AxisAuto();
+                    isUserZooming = false;
+                }
+                finally
+                {
+                    isProgrammaticChange = false;
+                }
+                formsPlot.Render();
             };
             cm.Items.Add(autoAxis);
 
@@ -817,6 +923,16 @@ namespace CsvTimeSeriesViewer
             // 시간 범위 메뉴
             var timeRangeMenu = new ToolStripMenuItem("시간 범위");
 
+            var customTimeRange = new ToolStripMenuItem("사용자 정의 시간 범위...");
+            customTimeRange.Click += (s, ev) =>
+            {
+                chkEnableTimeRange.Checked = true;
+                dtpStartTime.Focus();
+            };
+            timeRangeMenu.DropDownItems.Add(customTimeRange);
+
+            timeRangeMenu.DropDownItems.Add(new ToolStripSeparator());
+
             var last1Hour = new ToolStripMenuItem("최근 1시간");
             last1Hour.Click += (s, ev) => SetTimeRange(1);
             timeRangeMenu.DropDownItems.Add(last1Hour);
@@ -828,6 +944,15 @@ namespace CsvTimeSeriesViewer
             var last24Hours = new ToolStripMenuItem("최근 24시간");
             last24Hours.Click += (s, ev) => SetTimeRange(24);
             timeRangeMenu.DropDownItems.Add(last24Hours);
+
+            var allData = new ToolStripMenuItem("전체 데이터");
+            allData.Click += (s, ev) =>
+            {
+                chkEnableTimeRange.Checked = false;
+                chkSyncTimeAxis.Checked = true;
+                UpdatePlot();
+            };
+            timeRangeMenu.DropDownItems.Add(allData);
 
             cm.Items.Add(timeRangeMenu);
 
@@ -849,10 +974,19 @@ namespace CsvTimeSeriesViewer
             double now = DateTime.Now.ToOADate();
             double start = DateTime.Now.AddHours(-hours).ToOADate();
 
-            formsPlot.Plot.SetAxisLimits(xMin: start, xMax: now);
-            isUserZooming = true;
-            AutoScaleYAxis();
-            formsPlot.Refresh();
+            isProgrammaticChange = true;
+            try
+            {
+                formsPlot.Plot.SetAxisLimits(xMin: start, xMax: now);
+                isUserZooming = true;
+                AutoScaleYAxis();
+            }
+            finally
+            {
+                isProgrammaticChange = false;
+            }
+
+            formsPlot.Render();
         }
 
         private void SavePlotImage()
@@ -922,9 +1056,162 @@ namespace CsvTimeSeriesViewer
             File.WriteAllLines(filename, lines);
         }
 
+        private void ChkEnableTimeRange_CheckedChanged(object sender, EventArgs e)
+        {
+            isTimeRangeEnabled = chkEnableTimeRange.Checked;
+            dtpStartTime.Enabled = isTimeRangeEnabled;
+            dtpEndTime.Enabled = isTimeRangeEnabled;
+            btnApplyTimeRange.Enabled = isTimeRangeEnabled;
+
+            if (!isTimeRangeEnabled)
+            {
+                // 시간 범위를 사용하지 않으면 전체 데이터 표시
+                customStartTime = null;
+                customEndTime = null;
+                chkAutoScale.Checked = true;
+
+                // 데이터 다시 읽기 (시간 필터링 해제)
+                UpdateGraph(null);
+            }
+            else
+            {
+                // 시간 범위 사용 시 자동 스케일 해제
+                chkAutoScale.Checked = false;
+                chkSyncTimeAxis.Checked = false;
+
+                // 현재 로드된 데이터의 시간 범위로 초기값 설정
+                SetDefaultTimeRange();
+            }
+        }
+
+        private void BtnApplyTimeRange_Click(object sender, EventArgs e)
+        {
+            if (dtpStartTime.Value >= dtpEndTime.Value)
+            {
+                MessageBox.Show("종료 시간은 시작 시간보다 이후여야 합니다.", "시간 범위 오류",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            customStartTime = dtpStartTime.Value;
+            customEndTime = dtpEndTime.Value;
+
+            // 데이터 다시 읽기 (시간 범위 필터링 적용)
+            UpdateGraph(null);
+
+            // 사용자 정의 시간 범위 적용
+            isProgrammaticChange = true;
+            try
+            {
+                formsPlot.Plot.SetAxisLimits(
+                    xMin: customStartTime.Value.ToOADate(),
+                    xMax: customEndTime.Value.ToOADate()
+                );
+
+                isUserZooming = true;
+                chkAutoScale.Checked = false;
+                AutoScaleYAxis();
+            }
+            finally
+            {
+                isProgrammaticChange = false;
+            }
+
+            formsPlot.Render();
+        }
+
+        private void SetDefaultTimeRange()
+        {
+            DateTime? minTime = null;
+            DateTime? maxTime = null;
+
+            foreach (var file in csvFiles.Values)
+            {
+                if (file.Timestamps.Count > 0)
+                {
+                    var fileMin = file.Timestamps.Min();
+                    var fileMax = file.Timestamps.Max();
+
+                    if (!minTime.HasValue || fileMin < minTime.Value)
+                        minTime = fileMin;
+                    if (!maxTime.HasValue || fileMax > maxTime.Value)
+                        maxTime = fileMax;
+                }
+            }
+
+            if (minTime.HasValue && maxTime.HasValue)
+            {
+                dtpStartTime.Value = minTime.Value;
+                dtpEndTime.Value = maxTime.Value;
+
+                // 시간 범위 정보 표시
+                lblStatus.Text = $"데이터 시간 범위: {minTime.Value:yyyy-MM-dd HH:mm:ss} ~ {maxTime.Value:yyyy-MM-dd HH:mm:ss}";
+            }
+            else
+            {
+                dtpStartTime.Value = DateTime.Now.AddHours(-1);
+                dtpEndTime.Value = DateTime.Now;
+            }
+        }
+
+        private void BtnMonitoring_Click(object sender, EventArgs e)
+        {
+            isMonitoringEnabled = !isMonitoringEnabled;
+
+            if (isMonitoringEnabled)
+            {
+                btnMonitoring.Text = "🟢 모니터링 ON";
+                btnMonitoring.BackColor = Color.LightGreen;
+                StartUpdateTimer();
+                lblStatus.Text = "실시간 모니터링 활성화됨";
+                lblStatus.ForeColor = Color.Green;
+            }
+            else
+            {
+                btnMonitoring.Text = "🔴 모니터링 OFF";
+                btnMonitoring.BackColor = Color.LightCoral;
+                StopUpdateTimer();
+                lblStatus.Text = "실시간 모니터링 중지됨";
+                lblStatus.ForeColor = Color.Orange;
+            }
+        }
+
+        private void BtnToggleBottom_Click(object sender, EventArgs e)
+        {
+            isBottomPanelVisible = !isBottomPanelVisible;
+
+            if (isBottomPanelVisible)
+            {
+                pnlBottom.Visible = true;
+                splitterBottom.Visible = true;
+                btnToggleBottom.Text = "▼ 패널 숨기기";
+            }
+            else
+            {
+                pnlBottom.Visible = false;
+                splitterBottom.Visible = false;
+                btnToggleBottom.Text = "▲ 패널 보이기";
+            }
+        }
+
         private void ChkEnableMonitoring_CheckedChanged(object sender, EventArgs e)
         {
+            // 이전 버전 호환성을 위해 유지
             isMonitoringEnabled = chkEnableMonitoring.Checked;
+
+            if (btnMonitoring != null)
+            {
+                if (isMonitoringEnabled)
+                {
+                    btnMonitoring.Text = "🟢 모니터링 ON";
+                    btnMonitoring.BackColor = Color.LightGreen;
+                }
+                else
+                {
+                    btnMonitoring.Text = "🔴 모니터링 OFF";
+                    btnMonitoring.BackColor = Color.LightCoral;
+                }
+            }
 
             if (isMonitoringEnabled)
             {
@@ -966,6 +1253,12 @@ namespace CsvTimeSeriesViewer
                         AddCsvFile(filePath);
                     }
                     UpdateColumnTree();
+
+                    // 시간 범위가 활성화되어 있고 첫 파일 추가시 기본값 설정
+                    if (chkEnableTimeRange != null && chkEnableTimeRange.Checked && csvFiles.Count > 0)
+                    {
+                        SetDefaultTimeRange();
+                    }
                 }
             }
         }
@@ -1386,7 +1679,7 @@ namespace CsvTimeSeriesViewer
             {
                 ReadAllCsvData();
 
-                this.Invoke((MethodInvoker)delegate
+                this.BeginInvoke((MethodInvoker)delegate
                 {
                     UpdatePlot();
                     UpdateCurrentValues();
@@ -1394,7 +1687,7 @@ namespace CsvTimeSeriesViewer
             }
             catch (Exception ex)
             {
-                this.Invoke((MethodInvoker)delegate
+                this.BeginInvoke((MethodInvoker)delegate
                 {
                     lblStatus.Text = $"오류: {ex.Message}";
                     lblStatus.ForeColor = Color.Red;
@@ -1404,6 +1697,8 @@ namespace CsvTimeSeriesViewer
 
         private void UpdateCurrentValues()
         {
+            if (dgvCurrentValues == null || dgvCurrentValues.IsDisposed) return;
+
             dgvCurrentValues.Rows.Clear();
 
             foreach (var file in csvFiles)
@@ -1536,6 +1831,16 @@ namespace CsvTimeSeriesViewer
                                 {
                                     var fileTime = File.GetLastWriteTime(fileInfo.FilePath);
                                     timestamp = fileTime.AddSeconds(rowNumber);
+                                }
+                            }
+
+                            // 시간 범위 필터링 (읽기 단계에서 필터링하여 메모리 효율성 향상)
+                            if (isTimeRangeEnabled && customStartTime.HasValue && customEndTime.HasValue)
+                            {
+                                if (timestamp < customStartTime.Value || timestamp > customEndTime.Value)
+                                {
+                                    rowNumber++;
+                                    continue;
                                 }
                             }
 
@@ -1759,44 +2064,59 @@ namespace CsvTimeSeriesViewer
 
                 formsPlot.Plot.XAxis.DateTimeFormat(true);
 
-                // 자동 스케일 또는 사용자 줌 처리
-                if (!chkAutoScale.Checked && hadValidLimits && !isUserZooming)
+                // 축 설정 로직
+                isProgrammaticChange = true;
+                try
                 {
-                    formsPlot.Plot.SetAxisLimits(existingLimits);
-                }
-                else if (isUserZooming)
-                {
-                    // 사용자가 줌/팬 중일 때
-                    AutoScaleYAxis();
-                }
-                else if (chkSyncTimeAxis.Checked)
-                {
-                    DateTime? minTime = null;
-                    DateTime? maxTime = null;
-
-                    foreach (var fileInfo in csvFiles.Values)
+                    if (isTimeRangeEnabled && customStartTime.HasValue && customEndTime.HasValue)
                     {
-                        if (fileInfo.Timestamps.Count > 0)
+                        // 사용자 정의 시간 범위가 설정된 경우
+                        formsPlot.Plot.SetAxisLimits(
+                            xMin: customStartTime.Value.ToOADate(),
+                            xMax: customEndTime.Value.ToOADate()
+                        );
+                        AutoScaleYAxis();
+                    }
+                    else if (hadValidLimits)
+                    {
+                        // 이전 축 설정이 있는 경우
+                        if (isUserZooming || !chkAutoScale.Checked)
                         {
-                            var fileMin = fileInfo.Timestamps.Min();
-                            var fileMax = fileInfo.Timestamps.Max();
-
-                            minTime = minTime == null ? fileMin : (fileMin < minTime ? fileMin : minTime);
-                            maxTime = maxTime == null ? fileMax : (fileMax > maxTime ? fileMax : maxTime);
+                            // 사용자가 줌/팬을 했거나 자동 스케일이 꺼져있으면 이전 설정 유지
+                            formsPlot.Plot.SetAxisLimits(existingLimits);
+                        }
+                        else if (isMonitoringEnabled && chkAutoScale.Checked)
+                        {
+                            // 실시간 모니터링 중이고 자동 스케일이 켜져 있을 때만 최신 데이터 추적
+                            ApplyRealtimeTracking();
+                        }
+                        else if (chkSyncTimeAxis.Checked)
+                        {
+                            // 시간축 동기화
+                            ApplySyncTimeAxis();
+                        }
+                        else
+                        {
+                            // 그 외의 경우 이전 설정 유지
+                            formsPlot.Plot.SetAxisLimits(existingLimits);
                         }
                     }
-
-                    if (minTime.HasValue && maxTime.HasValue)
+                    else
                     {
-                        formsPlot.Plot.SetAxisLimits(
-                            xMin: minTime.Value.ToOADate(),
-                            xMax: maxTime.Value.ToOADate()
-                        );
+                        // 처음 로드시
+                        if (chkSyncTimeAxis.Checked)
+                        {
+                            ApplySyncTimeAxis();
+                        }
+                        else
+                        {
+                            formsPlot.Plot.AxisAuto();
+                        }
                     }
                 }
-                else
+                finally
                 {
-                    formsPlot.Plot.AxisAuto();
+                    isProgrammaticChange = false;
                 }
 
                 if (totalColumns > 0 && isLegendVisible)
@@ -1806,15 +2126,138 @@ namespace CsvTimeSeriesViewer
                     legend.FontSize = 10;
                 }
 
-                formsPlot.Refresh();
+                formsPlot.Render();
 
                 string monitoringStatus = isMonitoringEnabled ? "모니터링 중" : "모니터링 중지";
-                lblStatus.Text = $"{monitoringStatus}... (파일: {csvFiles.Count}개, " +
-                               $"유효 데이터: {totalPoints}개, " +
-                               $"표시 컬럼: {totalColumns}개, " +
-                               $"Y축 그룹: {Math.Min(columnGroups.Count, 2)}개, " +
-                               $"마지막 업데이트: {DateTime.Now:HH:mm:ss})";
+                string zoomStatus = isUserZooming ? " [수동 줌]" : "";
+                string trackingStatus = (isMonitoringEnabled && chkAutoScale.Checked && !isUserZooming)
+                    ? " [실시간 추적]" : "";
+                string timeRangeStatus = isTimeRangeEnabled && customStartTime.HasValue && customEndTime.HasValue
+                    ? $" [{customStartTime.Value:MM-dd HH:mm} ~ {customEndTime.Value:MM-dd HH:mm}]" : "";
+                string shortcutHint = isUserZooming ? " (R: 실시간 추적 재개)" : "";
+
+                lblStatus.Text = $"{monitoringStatus}{zoomStatus}{trackingStatus}{timeRangeStatus}{shortcutHint} | " +
+                               $"파일: {csvFiles.Count}개, " +
+                               $"데이터: {totalPoints}개, " +
+                               $"컬럼: {totalColumns}개, " +
+                               $"Y축: {Math.Min(columnGroups.Count, 2)}개 | " +
+                               $"업데이트: {DateTime.Now:HH:mm:ss}";
                 lblStatus.ForeColor = isMonitoringEnabled ? Color.Green : Color.Orange;
+            }
+        }
+
+        private void ApplyRealtimeTracking()
+        {
+            // 시간 범위가 설정되어 있으면 그 범위 유지
+            if (isTimeRangeEnabled && customStartTime.HasValue && customEndTime.HasValue)
+            {
+                bool wasAlreadyProgrammatic = isProgrammaticChange;
+                if (!wasAlreadyProgrammatic) isProgrammaticChange = true;
+
+                try
+                {
+                    formsPlot.Plot.SetAxisLimits(
+                        xMin: customStartTime.Value.ToOADate(),
+                        xMax: customEndTime.Value.ToOADate()
+                    );
+
+                    AutoScaleYAxis();
+                }
+                finally
+                {
+                    if (!wasAlreadyProgrammatic) isProgrammaticChange = false;
+                }
+                return;
+            }
+
+            DateTime? maxTime = null;
+            DateTime? minTime = null;
+
+            foreach (var fileInfo in csvFiles.Values)
+            {
+                if (fileInfo.Timestamps.Count > 0)
+                {
+                    var fileMax = fileInfo.Timestamps.Max();
+                    maxTime = maxTime == null ? fileMax : (fileMax > maxTime ? fileMax : maxTime);
+                }
+            }
+
+            if (maxTime.HasValue)
+            {
+                double windowMinutes = nudTimeWindow != null ? (double)nudTimeWindow.Value : 5.0;
+                DateTime windowStart = maxTime.Value.AddMinutes(-windowMinutes);
+
+                foreach (var fileInfo in csvFiles.Values)
+                {
+                    if (fileInfo.Timestamps.Count > 0)
+                    {
+                        var fileMin = fileInfo.Timestamps.Min();
+                        minTime = minTime == null ? fileMin : (fileMin < minTime ? fileMin : minTime);
+                    }
+                }
+
+                bool wasAlreadyProgrammatic = isProgrammaticChange;
+                if (!wasAlreadyProgrammatic) isProgrammaticChange = true;
+
+                try
+                {
+                    if (minTime.HasValue && (maxTime.Value - minTime.Value).TotalMinutes < windowMinutes)
+                    {
+                        formsPlot.Plot.SetAxisLimits(
+                            xMin: minTime.Value.ToOADate(),
+                            xMax: maxTime.Value.ToOADate()
+                        );
+                    }
+                    else
+                    {
+                        formsPlot.Plot.SetAxisLimits(
+                            xMin: windowStart.ToOADate(),
+                            xMax: maxTime.Value.ToOADate()
+                        );
+                    }
+
+                    AutoScaleYAxis();
+                }
+                finally
+                {
+                    if (!wasAlreadyProgrammatic) isProgrammaticChange = false;
+                }
+            }
+        }
+
+        private void ApplySyncTimeAxis()
+        {
+            DateTime? minTime = null;
+            DateTime? maxTime = null;
+
+            foreach (var fileInfo in csvFiles.Values)
+            {
+                if (fileInfo.Timestamps.Count > 0)
+                {
+                    var fileMin = fileInfo.Timestamps.Min();
+                    var fileMax = fileInfo.Timestamps.Max();
+
+                    minTime = minTime == null ? fileMin : (fileMin < minTime ? fileMin : minTime);
+                    maxTime = maxTime == null ? fileMax : (fileMax > maxTime ? fileMax : maxTime);
+                }
+            }
+
+            if (minTime.HasValue && maxTime.HasValue)
+            {
+                bool wasAlreadyProgrammatic = isProgrammaticChange;
+                if (!wasAlreadyProgrammatic) isProgrammaticChange = true;
+
+                try
+                {
+                    formsPlot.Plot.SetAxisLimits(
+                        xMin: minTime.Value.ToOADate(),
+                        xMax: maxTime.Value.ToOADate()
+                    );
+                }
+                finally
+                {
+                    if (!wasAlreadyProgrammatic) isProgrammaticChange = false;
+                }
             }
         }
 
@@ -1861,10 +2304,36 @@ namespace CsvTimeSeriesViewer
 
         private void ChkAutoScale_CheckedChanged(object sender, EventArgs e)
         {
+            // 시간 범위가 활성화되어 있으면 자동 스케일 비활성화
+            if (isTimeRangeEnabled && chkAutoScale.Checked)
+            {
+                chkAutoScale.Checked = false;
+                MessageBox.Show("시간 범위가 설정되어 있을 때는 자동 스케일을 사용할 수 없습니다.",
+                    "알림", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
             if (chkAutoScale.Checked)
             {
+                // 자동 스케일을 켜면 수동 줌 상태 해제
                 isUserZooming = false;
+
+                // 실시간 모니터링 중이면 최신 데이터로 이동
+                if (isMonitoringEnabled)
+                {
+                    isProgrammaticChange = true;
+                    try
+                    {
+                        ApplyRealtimeTracking();
+                    }
+                    finally
+                    {
+                        isProgrammaticChange = false;
+                    }
+                    formsPlot.Render();
+                }
             }
+
             UpdatePlot();
         }
 
