@@ -167,10 +167,21 @@ namespace CsvTimeSeriesViewer
         /// </summary>
         public static PressureStatistics AnalyzePressureData(List<DateTime> times, List<double> pressures)
         {
-            if (pressures.Count == 0) return null;
+            if (pressures == null || pressures.Count == 0)
+            {
+                System.Diagnostics.Debug.WriteLine("압력 데이터가 null이거나 비어있음");
+                return null;
+            }
 
-            var validPressures = pressures.Where(p => !double.IsNaN(p) && p > 0).ToList();
-            if (validPressures.Count == 0) return null;
+            var validPressures = pressures.Where(p => !double.IsNaN(p) && !double.IsInfinity(p) && p > 0).ToList();
+
+            System.Diagnostics.Debug.WriteLine($"전체 압력 데이터: {pressures.Count}개, 유효한 데이터: {validPressures.Count}개");
+
+            if (validPressures.Count == 0)
+            {
+                System.Diagnostics.Debug.WriteLine("유효한 압력 데이터가 없음");
+                return null;
+            }
 
             var stats = new PressureStatistics
             {
@@ -181,13 +192,18 @@ namespace CsvTimeSeriesViewer
                 MinVacuumLevel = GetVacuumLevel(validPressures.Min()),
                 MaxVacuumLevel = GetVacuumLevel(validPressures.Max()),
                 SpikeCount = DetectPressureSpikes(validPressures).Count,
-                LeakRate = DetectLeakRate(times, pressures),
-                StabilizationTime = CalculateStabilizationTime(times, pressures, validPressures.Min() * 1.1)
+                LeakRate = times != null && times.Count >= validPressures.Count ?
+                          DetectLeakRate(times.Take(validPressures.Count).ToList(), validPressures) : 0,
+                StabilizationTime = times != null && times.Count >= validPressures.Count ?
+                                  CalculateStabilizationTime(times.Take(validPressures.Count).ToList(),
+                                                           validPressures, validPressures.Min() * 1.1) : null
             };
 
             // 표준편차 계산
             double variance = validPressures.Sum(p => Math.Pow(p - stats.Average, 2)) / validPressures.Count;
             stats.StdDev = Math.Sqrt(variance);
+
+            System.Diagnostics.Debug.WriteLine($"분석 결과 - Min: {stats.Min:E2}, Max: {stats.Max:E2}, Avg: {stats.Average:E2}");
 
             return stats;
         }

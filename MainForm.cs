@@ -1194,6 +1194,21 @@ namespace CsvTimeSeriesViewer
             }
         }
 
+        private void BtnToggleRight_Click(object sender, EventArgs e)
+        {
+            if (pnlRightInfo != null)
+            {
+                pnlRightInfo.Visible = !pnlRightInfo.Visible;
+
+                // 버튼 텍스트 업데이트
+                if (btnToggleRight != null)
+                {
+                    btnToggleRight.Text = pnlRightInfo.Visible ? "▶ 정보 숨기기" : "◀ 정보 패널";
+                }
+            }
+        }
+
+
         private void ChkEnableMonitoring_CheckedChanged(object sender, EventArgs e)
         {
             // 이전 버전 호환성을 위해 유지
@@ -2381,7 +2396,6 @@ namespace CsvTimeSeriesViewer
                 form.ShowDialog();
             }
         }
-
         private void ShowLeakTest()
         {
             if (csvFiles.Count == 0)
@@ -2392,36 +2406,67 @@ namespace CsvTimeSeriesViewer
 
             var results = new System.Text.StringBuilder();
             results.AppendLine("=== 리크 테스트 결과 ===\n");
+            bool hasData = false;
 
             foreach (var file in csvFiles)
             {
                 results.AppendLine($"파일: {file.Value.FileName}");
 
                 var pressureColumns = file.Value.Headers.Where(h =>
-                    h.Contains("Pressure", StringComparison.OrdinalIgnoreCase) ||
-                    h.Contains("Torr", StringComparison.OrdinalIgnoreCase)).ToList();
+                    (h.Contains("Pressure", StringComparison.OrdinalIgnoreCase) ||
+                     h.Contains("Torr", StringComparison.OrdinalIgnoreCase) ||
+                     h.Contains("Pirani", StringComparison.OrdinalIgnoreCase) ||
+                     h.Contains("Ion", StringComparison.OrdinalIgnoreCase) ||
+                     h.Contains("ATM", StringComparison.OrdinalIgnoreCase)) &&
+                    file.Value.SelectedColumns.Contains(h)).ToList();
 
-                foreach (var col in pressureColumns)
+                if (pressureColumns.Count == 0)
                 {
-                    if (file.Value.DataColumns.ContainsKey(col))
+                    results.AppendLine("  선택된 압력 컬럼이 없습니다.");
+                }
+                else
+                {
+                    foreach (var col in pressureColumns)
                     {
-                        var pressures = file.Value.DataColumns[col];
-                        var times = file.Value.Timestamps;
+                        if (file.Value.DataColumns.ContainsKey(col) && file.Value.DataColumns[col].Count > 0)
+                        {
+                            var pressures = file.Value.DataColumns[col];
+                            var times = file.Value.Timestamps;
 
-                        double leakRate = PressureAnalysisTools.DetectLeakRate(times, pressures);
-                        results.AppendLine($"  {col}: 리크율 = {leakRate:E2} Torr/sec");
+                            if (times.Count >= pressures.Count && pressures.Count > 10)
+                            {
+                                double leakRate = PressureAnalysisTools.DetectLeakRate(
+                                    times.Take(pressures.Count).ToList(), pressures);
+                                results.AppendLine($"  {col}: 리크율 = {leakRate:E2} Torr/sec");
 
-                        if (leakRate > 1e-5)
-                            results.AppendLine($"    ⚠️ 경고: 높은 리크율 감지!");
+                                if (leakRate > 1e-5)
+                                    results.AppendLine($"    ⚠️ 경고: 높은 리크율 감지!");
+                                else if (leakRate > 1e-6)
+                                    results.AppendLine($"    ⚡ 주의: 중간 리크율");
+                                else
+                                    results.AppendLine($"    ✅ 정상: 낮은 리크율");
+
+                                hasData = true;
+                            }
+                            else
+                            {
+                                results.AppendLine($"  {col}: 데이터 부족 (최소 10개 필요)");
+                            }
+                        }
                     }
                 }
                 results.AppendLine();
             }
 
+            if (!hasData)
+            {
+                results.AppendLine("\n⚠️ 분석 가능한 압력 데이터가 없습니다.");
+                results.AppendLine("압력 관련 컬럼을 선택했는지 확인하세요.");
+            }
+
             MessageBox.Show(results.ToString(), "리크 테스트 결과",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
-
         private void ShowPumpdownAnalysis()
         {
             MessageBox.Show("펌프다운 곡선 분석 기능은 개발 중입니다.", "알림",

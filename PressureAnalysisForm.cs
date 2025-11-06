@@ -23,11 +23,28 @@ namespace CsvTimeSeriesViewer
 
             foreach (var file in csvFiles)
             {
+                // 압력 관련 컬럼을 더 넓게 검색 (Pressure, Torr, Pirani, Ion 등)
                 var pressureColumns = file.Value.Headers.Where(h =>
-                    h.Contains("Pressure", StringComparison.OrdinalIgnoreCase)).ToList();
+                    h.Contains("Pressure", StringComparison.OrdinalIgnoreCase) ||
+                    h.Contains("Torr", StringComparison.OrdinalIgnoreCase) ||
+                    h.Contains("Pirani", StringComparison.OrdinalIgnoreCase) ||
+                    h.Contains("Ion", StringComparison.OrdinalIgnoreCase) ||
+                    h.Contains("ATM", StringComparison.OrdinalIgnoreCase)).ToList();
+
+                // 디버그 정보
+                System.Diagnostics.Debug.WriteLine($"파일: {file.Value.FileName}");
+                System.Diagnostics.Debug.WriteLine($"  발견된 압력 컬럼: {string.Join(", ", pressureColumns)}");
+                System.Diagnostics.Debug.WriteLine($"  선택된 컬럼: {string.Join(", ", file.Value.SelectedColumns)}");
 
                 foreach (var col in pressureColumns)
                 {
+                    // 선택된 컬럼인지 확인
+                    if (!file.Value.SelectedColumns.Contains(col))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"  {col} - 선택되지 않음");
+                        continue;
+                    }
+
                     if (file.Value.DataColumns.ContainsKey(col) && file.Value.DataColumns[col].Count > 0)
                     {
                         var stats = PressureAnalysisTools.AnalyzePressureData(
@@ -64,14 +81,26 @@ namespace CsvTimeSeriesViewer
                             }
                         }
                     }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"  {col} - 데이터 없음");
+                    }
                 }
             }
 
-            // 자동 열 너비 조정
-            dgvAnalysis.AutoResizeColumns();
+            // 분석 결과가 없을 경우 메시지 표시
+            if (dgvAnalysis.Rows.Count == 0)
+            {
+                MessageBox.Show("분석할 수 있는 압력 데이터가 없습니다.\n\n" +
+                    "다음 사항을 확인하세요:\n" +
+                    "1. 압력 관련 컬럼이 선택되어 있는지 확인\n" +
+                    "2. 데이터가 로드되어 있는지 확인\n" +
+                    "3. 컬럼명에 Pressure, Torr, Pirani, Ion, ATM 등이 포함되어 있는지 확인",
+                    "데이터 없음", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
         }
 
-        private void BtnRefresh_Click(object sender, EventArgs e)
+            private void BtnRefresh_Click(object sender, EventArgs e)
         {
             AnalyzeData();
         }

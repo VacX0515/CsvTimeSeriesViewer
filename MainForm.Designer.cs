@@ -37,6 +37,7 @@ namespace CsvTimeSeriesViewer
         private Panel pnlTop;
         private Panel pnlBottom;
         private Button btnToggleBottom;
+        private Button btnToggleRight;
         private Button btnMonitoring;
         private Splitter splitterBottom;
         private Panel pnlMain;
@@ -174,6 +175,20 @@ namespace CsvTimeSeriesViewer
             this.btnToggleBottom.Text = "▼ 패널 숨기기";
             this.btnToggleBottom.UseVisualStyleBackColor = true;
             this.btnToggleBottom.Click += new System.EventHandler(this.BtnToggleBottom_Click);
+
+            // 
+            // btnToggleRight (새로 추가)
+            // 
+            var btnToggleRight = new System.Windows.Forms.Button();
+            btnToggleRight.Location = new System.Drawing.Point(1100, 20);
+            btnToggleRight.Name = "btnToggleRight";
+            btnToggleRight.Size = new System.Drawing.Size(100, 35);
+            btnToggleRight.TabIndex = 11;
+            btnToggleRight.Text = "◀ 정보 패널";
+            btnToggleRight.UseVisualStyleBackColor = true;
+            btnToggleRight.Click += new System.EventHandler(this.BtnToggleRight_Click);
+            this.grpSettings.Controls.Add(btnToggleRight);
+
 
             // 
             // lblUpdateInterval
